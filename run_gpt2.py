@@ -84,6 +84,10 @@ def format_data(dataset, special_tokens, max_a=200, max_q=50, max_s=770):
             a_pos = np.arange(max_a) + 1
             s_pos = np.arange(max_s) + 1
 
+            q_pos[len(np.array(quest)[curr_idx]):max_q] = 0
+            a_pos[len(np.array(answ)[curr_idx]):max_a] = 0
+            s_pos[story_len:max_s] = 0
+
             full_pos = [0] + s_pos.tolist() + [0] + q_pos.tolist() + [0] + a_pos.tolist() + [0]
             pos_ids.append(np.array(full_pos))
 
@@ -92,25 +96,16 @@ def format_data(dataset, special_tokens, max_a=200, max_q=50, max_s=770):
             a_tok = np.zeros(max_a)
             s_tok = np.zeros(max_s)
 
-            full_tok = [0] + ([1] * len(s_tok.tolist())) + [0] + ([2] * len(q_tok.tolist())) + [0] + ([3] * len(a_tok.tolist())) + [0]
+            q_tok[0: len(np.array(quest)[curr_idx])] = 2
+            a_tok[0: len(np.array(answ)[curr_idx])] = 3
+            s_tok[0: story_len] = 1
+
+            full_tok = [0] + s_tok.tolist() + [0] + q_tok.tolist() + [0] + a_tok.tolist() + [0]
             token_types.append(np.array(full_tok))
-
-            ### Multi Class LABEL
-            mc_label = np.zeros((1))
-            mc_labels.append(mc_label)
-
-            ### Multi Class TOKEN IDS
-            mc_tok_id = np.zeros(1)
-            mc_tok_ids.append(mc_tok_id)
 
     dataset_filter = np.expand_dims(dataset_filter, axis=1)
     token_types = np.expand_dims(token_types, axis=1)
     pos_ids = np.expand_dims(pos_ids, axis=1)
-
-    ### Lang Model LABEL
-    # Replace the padding of 0 to -1
-    lm_labels = np.copy(dataset_filter)
-    lm_labels[np.where(lm_labels == 0)] = -1
 
     tensor_dataset = []
     inputs = (np.array(dataset_filter), np.array(token_types), np.array(pos_ids))
@@ -135,8 +130,6 @@ def sample_word(model, inputs=None, special_tokens=None, temperature=1, top_k=0,
             new_word = torch.multinomial(log_probs, num_samples=1)
         else:
             _, new_word = torch.topk(log_probs, k=1, dim=-1)
-
-        # input[0][2][0].append(new_word.item())
 
     return new_word.item()
 
@@ -216,7 +209,7 @@ def run_model():
             # story_tokens = enc.encode(story_text)
             story_text = "Once upon a time, in a barn near a farm house, there lived a little white kitten named Cotton. Cotton lived high up in a nice warm place above the barn where all of the farmer's horses slept. But Cotton wasn't alone in her little home above the barn, oh no. She shared her hay bed with her mommy and 5 other sisters. All of her sisters were cute and fluffy, like Cotton. But she was the only white one in the bunch. The rest of her sisters were all orange with beautiful white tiger stripes like Cotton's mommy. Being different made Cotton quite sad. She often wished she looked like the rest of her family. So one day, when Cotton found a can of the old farmer's orange paint, she used it to paint herself like them. When her mommy and sisters found her they started laughing. \n\n\"What are you doing, Cotton?!\" \n\n\"I only wanted to be more like you\". \n\nCotton's mommy rubbed her face on Cotton's and said \"Oh Cotton, but your fur is so pretty and special, like you. We would never want you to be any other way\". And with that, Cotton's mommy picked her up and dropped her into a big bucket of water. When Cotton came out she was herself again. Her sisters licked her face until Cotton's fur was all all dry. \n\n\"Don't ever do that again, Cotton!\" they all cried. \"Next time you might mess up that pretty white fur of yours and we wouldn't want that!\" \n\nThen Cotton thought, \"I change my mind. I like being special\"."
             question_text = "Where does Cotton live?"
-            answer_text = "High up"
+            answer_text = ""
 
             special_token_ids = enc.convert_tokens_to_ids(special_tokens)
 
