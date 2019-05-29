@@ -192,7 +192,7 @@ def format_data(dataset, special_tokens, max_a=200, max_q=50, max_s=770):
     lm_labels[np.where(lm_labels == 0)] = -1
 
     tensor_dataset = []
-    inputs = (np.array(dataset_filter), np.array(mc_tok_ids), np.array(lm_labels),  np.array(mc_labels), np.array(token_types))
+    inputs = (np.array(dataset_filter), np.array(mc_tok_ids), np.array(lm_labels),  np.array(mc_labels), np.array(token_types), np.array(pos_ids))
     tensor_dataset.append(tuple(torch.tensor(t, dtype=torch.int64, device=torch.device(device)) for t in inputs))
 
     return tensor_dataset[0]

@@ -96,9 +96,9 @@ def format_data(dataset, special_tokens, max_a=200, max_q=50, max_s=770):
             a_tok = np.zeros(max_a)
             s_tok = np.zeros(max_s)
 
-            q_tok[0: len(np.array(quest)[curr_idx])] = 2
-            a_tok[0: len(np.array(answ)[curr_idx])] = 3
-            s_tok[0: story_len] = 1
+            q_tok[len(np.array(quest)[curr_idx]):max_q] = 2
+            a_tok[len(np.array(answ)[curr_idx]):max_a] = 3
+            s_tok[story_len:max_s] = 1
 
             full_tok = [0] + s_tok.tolist() + [0] + q_tok.tolist() + [0] + a_tok.tolist() + [0]
             token_types.append(np.array(full_tok))
