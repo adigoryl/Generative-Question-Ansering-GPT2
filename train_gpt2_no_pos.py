@@ -150,28 +150,28 @@ def format_data(dataset, special_tokens, max_a=200, max_q=50, max_s=770):
             full_input = [special_tokens[0]] + s.tolist() + [special_tokens[2]] + q.tolist() + [special_tokens[3]] + a.tolist() + [special_tokens[1]]
             dataset_filter.append(np.array(full_input))
 
-            # ### POSITION IDS
-            # q_pos = np.arange(max_q) + 2
-            # a_pos = np.arange(max_a) + 2
-            # s_pos = np.arange(max_s) + 2
-            #
+            ### POSITION IDS
+            q_pos = np.zeros(max_q)
+            a_pos = np.zeros(max_a)
+            s_pos = np.zeros(max_s)
+
             # q_pos[len(np.array(quest)[curr_idx]):max_q] = 0
             # a_pos[len(np.array(answ)[curr_idx]):max_a] = 0
             # s_pos[story_len:max_s] = 0
-            #
-            # full_pos = [1] + s_pos.tolist() + [1] + q_pos.tolist() + [1] + a_pos.tolist() + [1]
-            # pos_ids.append(np.array(full_pos))
+
+            full_pos = [1] + s_pos.tolist() + [2] + q_pos.tolist() + [3] + a_pos.tolist() + [4]
+            pos_ids.append(np.array(full_pos))
 
             ### TOKEN TYPES
             q_tok = np.zeros(max_q)
             a_tok = np.zeros(max_a)
             s_tok = np.zeros(max_s)
 
-            q_tok[0: len(np.array(quest)[curr_idx])] = 6
-            a_tok[0: len(np.array(answ)[curr_idx])] = 7
-            s_tok[0: story_len] = 5
+            q_tok[0: len(np.array(quest)[curr_idx])] = 2
+            a_tok[0: len(np.array(answ)[curr_idx])] = 3
+            s_tok[0: story_len] = 1
 
-            full_tok = [1] + s_tok.tolist() + [2] + q_tok.tolist() + [3] + a_tok.tolist() + [4]
+            full_tok = [5] + s_tok.tolist() + [5] + q_tok.tolist() + [5] + a_tok.tolist() + [5]
             token_types.append(np.array(full_tok))
 
             ### Multi Class LABEL
