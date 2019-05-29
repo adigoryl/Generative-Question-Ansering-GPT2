@@ -102,7 +102,6 @@ def get_max_lengths(dataset):
 def format_data(dataset, special_tokens, max_a=200, max_q=50, max_s=770):
     dataset_filter = []
 
-    # dataset_filter = torch.tensor(dataset_filte, dtype=torch.int64)
     pos_ids = []
     token_types = []
     mc_labels = []
@@ -110,34 +109,32 @@ def format_data(dataset, special_tokens, max_a=200, max_q=50, max_s=770):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # story_hist = []
-    # q_hist = []
-    # a_hist = []
     for i in range(0, len(dataset)):
         story = dataset[i][0]
         quest = dataset[i][1]
         answ = dataset[i][2]
 
         story_len = len(story)
-        # story_hist.append(story_len)
 
+        # If story greater in len -> escape the loop / get rid of this data input
         if story_len > max_s:
             continue
 
         q_idx_arr = []
         a_idx_arr = []
+
+        # Check if Questions or Answers length satisfies
         for j in range(0, len(answ)):
 
-            # q_hist.append(len(quest[j]))
             q_pad = max_q - len(quest[j])
             if q_pad >= 0:
                 q_idx_arr.append(j)
 
-            # a_hist.append(len(answ[j]))
             a_pad = max_a - len(answ[j])
             if a_pad >= 0:
                 a_idx_arr.append(j)
 
+        # Get only overlapping indexes -> this means an input index satisfied the story, question and answer maximum length
         all_idx = np.intersect1d(q_idx_arr, a_idx_arr)
 
         for curr_idx in all_idx:
@@ -150,13 +147,13 @@ def format_data(dataset, special_tokens, max_a=200, max_q=50, max_s=770):
             a[0: len(np.array(answ)[curr_idx])] = np.array(answ)[curr_idx]
             s[0: story_len] = np.array(story)
 
-            full_input = [special_tokens[0]] + s.tolist() + [special_tokens[1]] + q.tolist() + [special_tokens[2]] + a.tolist() + [special_tokens[3]]
+            full_input = [special_tokens[0]] + s.tolist() + [special_tokens[2]] + q.tolist() + [special_tokens[3]] + a.tolist() + [special_tokens[1]]
             dataset_filter.append(np.array(full_input))
 
             ### POSITION IDS
-            q_pos = np.arange(max_q)
-            a_pos = np.arange(max_a)
-            s_pos = np.arange(max_s)
+            q_pos = np.arange(max_q) + 1
+            a_pos = np.arange(max_a) + 1
+            s_pos = np.arange(max_s) + 1
 
             full_pos = [0] + s_pos.tolist() + [0] + q_pos.tolist() + [0] + a_pos.tolist() + [0]
             pos_ids.append(np.array(full_pos))
@@ -182,6 +179,7 @@ def format_data(dataset, special_tokens, max_a=200, max_q=50, max_s=770):
     pos_ids = np.expand_dims(pos_ids, axis=1)
 
     ### Lang Model LABEL
+    # Replace the padding of 0 to -1
     lm_labels = np.copy(dataset_filter)
     lm_labels[np.where(lm_labels == 0)] = -1
 
