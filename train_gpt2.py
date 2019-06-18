@@ -98,6 +98,7 @@ def get_max_lengths(dataset):
 
     return max_s, max_q, max_a
 
+
 def prep_pad(max_q, max_a, max_s, story, question, answer, special_tokens, multi_class_tag):
 
     ### DATA
@@ -130,7 +131,7 @@ def prep_pad(max_q, max_a, max_s, story, question, answer, special_tokens, multi
     q_tok = np.zeros(max_q)
     a_tok = np.zeros(max_a)
     s_tok = np.zeros(max_s)
-    #
+
     # if multi_class_tag == 0:
     #     q_tok[0: len(question)] = 6
     #     a_tok[0: len(answer)] = 7
@@ -199,7 +200,6 @@ def format_data(dataset, special_tokens, device, multi_class_len, max_a, max_q, 
     mc_labels = []
     mc_tok_ids = []
 
-    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # dataset = np.load("/Users/aw678/PycharmProjects/gpt2_QA/dataset_filtered.npy").tolist()
 
     for i in range(0, len(dataset)):
@@ -215,7 +215,6 @@ def format_data(dataset, special_tokens, device, multi_class_len, max_a, max_q, 
             fake_qa_idx = np.random.randint(len(f_answ))
 
             for k in range(0, multi_class_len):
-
                 option = np.random.rand()
 
                 if k == 0:
@@ -241,15 +240,9 @@ def format_data(dataset, special_tokens, device, multi_class_len, max_a, max_q, 
                     token_types[-1].append(np.array(full_tok))
                     mc_tok_ids[-1].append(0)
 
-
             ### Multi Class LABEL
             mc_label = np.zeros((1))
             mc_labels.append(mc_label)
-
-    # inputs = np.expand_dims(inputs, axis=1)
-    # token_types = np.expand_dims(token_types, axis=1)
-    # pos_ids = np.expand_dims(pos_ids, axis=1)
-    # mc_tok_ids = np.expand_dims(mc_tok_ids, axis=1)
 
     ### Lang Model LABEL
     # Replace the padding of 0 to -1
@@ -317,8 +310,7 @@ def main():
     token_data = tokenize_and_encode(raw_data, tokenizer)
     # max_s, max_q, max_a = get_max_lengths(token_data)
     if args.model == "gpt2-medium":
-        # new_data = format_data(token_data, special_tokens_ids, device, multi_class_len=2, max_a=200, max_q=48, max_s=770)
-        new_data = format_data(token_data, special_tokens_ids, device, multi_class_len=2, max_a=150, max_q=48, max_s=564)
+        new_data = format_data(token_data, special_tokens_ids, device, multi_class_len=2, max_a=200, max_q=48, max_s=770)
     elif args.model == "gpt2":
         new_data = format_data(token_data, special_tokens_ids, device, multi_class_len=2, max_a=150, max_q=48, max_s=564)
 
@@ -371,20 +363,16 @@ def main():
                 loss = loss / args.grad_accumulation_steps
                 if args.amp_opt_lvl:
                     with amp.scale_loss(loss, optimizer) as scaled_loss:
-                        if n_gpu >1:
-                            scaled_loss.sum().backward()
-                        else:
-                            scaled_loss.backward()
+                        if n_gpu >1: scaled_loss.sum().backward()
+                        else: scaled_loss.backward()
                 else:
                     loss.backward()
 
                 if (step + 1) % args.grad_accumulation_steps == 0:
                     optimizer.step()
                     optimizer.zero_grad()
-                    if n_gpu > 1:
-                        epoch_losses.append(loss.sum().item())
-                    else:
-                        epoch_losses.append(loss.item())
+                    if n_gpu > 1: epoch_losses.append(loss.sum().item())
+                    else: epoch_losses.append(loss.item())
 
             all_tr_losses.append(epoch_losses)
 
