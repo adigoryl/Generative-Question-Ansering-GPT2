@@ -559,7 +559,7 @@ def sample_word(model, inputs=None, special_tokens=None, temperature=1, top_k=0,
     with torch.no_grad():
         context, new_word_index = format_data6(inputs, special_tokens)
         hid_states, presents = model(*context, past=past)
-        hid_states = hid_states[0,0, new_word_index, :] / temperature
+        hid_states = hid_states[0, 0, new_word_index, :] / temperature
         hid_states = top_k_logits(hid_states, k=top_k)
         log_probs = F.softmax(hid_states, dim=-1)
 

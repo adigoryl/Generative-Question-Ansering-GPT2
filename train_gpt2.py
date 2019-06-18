@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 def init_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--run_des", default="LM + pos_id", type=str, help="Description to help identify the run")
-    parser.add_argument("--model", default="gpt2", type=str, help="Model name i.e.: gpt2, gpt2-medium")
+    parser.add_argument("--model", default="gpt2-medium", type=str, help="Model name i.e.: gpt2, gpt2-medium")
     parser.add_argument("--do_train", type=bool, default=True)
     parser.add_argument('--train_dataset', type=str, default='', required=True)
     parser.add_argument('--grad_accumulation_steps', type=int, default=1, help="This is equivalent to batch size, if the GPU has limited memory")
@@ -98,26 +98,68 @@ def get_max_lengths(dataset):
 
     return max_s, max_q, max_a
 
+def prep_pad(max_q, max_a, max_s, story, question, answer, special_tokens, multi_class_tag):
 
-def format_data(dataset, special_tokens, max_a=200, max_q=50, max_s=770):
-    dataset_filter = []
+    ### DATA
+    q = np.zeros(max_q)
+    a = np.zeros(max_a)
+    s = np.zeros(max_s)
 
-    pos_ids = []
-    token_types = []
-    mc_labels = []
-    mc_tok_ids = []
+    q[0: len(question)] = question
+    a[0: len(answer)] = answer
+    s[0: len(story)] = story
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    full_input = [special_tokens[0]] + s.tolist() + [special_tokens[3]] + \
+                 [special_tokens[1]] + q.tolist() + [special_tokens[4]] + \
+                 [special_tokens[2]] + a.tolist() + [special_tokens[5]]
 
+    ### POSITION IDS
+    q_pos = np.arange(max_q) + 2
+    a_pos = np.arange(max_a) + 2
+    s_pos = np.arange(max_s) + 2
+
+    q_pos[len(question):max_q] = 0
+    a_pos[len(answer):max_a] = 0
+    s_pos[len(story):max_s] = 0
+
+    full_pos = [1] + s_pos.tolist() + [1] + \
+               [1] + q_pos.tolist() + [1] + \
+               [1] + a_pos.tolist() + [1]
+
+    ### TOKEN TYPES
+    q_tok = np.zeros(max_q)
+    a_tok = np.zeros(max_a)
+    s_tok = np.zeros(max_s)
+    #
+    # if multi_class_tag == 0:
+    #     q_tok[0: len(question)] = 6
+    #     a_tok[0: len(answer)] = 7
+    # elif multi_class_tag == 1:
+    #     a_tok[0: len(answer)] = 7
+    # elif multi_class_tag == 2:
+    #     q_tok[0: len(question)] = 6
+
+    a_tok[0: len(answer)] = 7
+    q_tok[0: len(question)] = 6
+    s_tok[0: len(story)] = 5
+
+    full_tok = [1] + s_tok.tolist() + [1] + \
+               [2] + q_tok.tolist() + [2] + \
+               [3] + a_tok.tolist() + [3]
+
+    return full_input, full_pos, full_tok
+
+
+def filter_len(dataset, max_a, max_q, max_s):
+
+    filtered_data = []
     for i in range(0, len(dataset)):
         story = dataset[i][0]
         quest = dataset[i][1]
         answ = dataset[i][2]
 
-        story_len = len(story)
-
         # If story greater in len -> escape the loop / get rid of this data input
-        if story_len > max_s:
+        if len(story) > max_s:
             continue
 
         q_idx_arr = []
@@ -129,71 +171,94 @@ def format_data(dataset, special_tokens, max_a=200, max_q=50, max_s=770):
             q_pad = max_q - len(quest[j])
             if q_pad >= 0:
                 q_idx_arr.append(j)
+            # else:
+            #     print(q_pad)
 
             a_pad = max_a - len(answ[j])
             if a_pad >= 0:
                 a_idx_arr.append(j)
+            # else:
+            #     print(a_pad)
 
         # Get only overlapping indexes -> this means an input index satisfied the story, question and answer maximum length
         all_idx = np.intersect1d(q_idx_arr, a_idx_arr)
 
-        for curr_idx in all_idx:
-            ### DATA
-            q = np.zeros(max_q)
-            a = np.zeros(max_a)
-            s = np.zeros(max_s)
+        if len(all_idx) == 0:
+            continue
 
-            q[0: len(np.array(quest)[curr_idx])] = np.array(quest)[curr_idx]
-            a[0: len(np.array(answ)[curr_idx])] = np.array(answ)[curr_idx]
-            s[0: story_len] = np.array(story)
+        filtered_data.append((story, np.array(quest)[all_idx], np.array(answ)[all_idx]))
 
-            full_input = [special_tokens[0]] + s.tolist() + [special_tokens[2]] + q.tolist() + [special_tokens[3]] + a.tolist() + [special_tokens[1]]
-            dataset_filter.append(np.array(full_input))
+    return filtered_data
 
-            ### POSITION IDS
-            q_pos = np.arange(max_q) + 2
-            a_pos = np.arange(max_a) + 2
-            s_pos = np.arange(max_s) + 2
 
-            q_pos[len(np.array(quest)[curr_idx]):max_q] = 0
-            a_pos[len(np.array(answ)[curr_idx]):max_a] = 0
-            s_pos[story_len:max_s] = 0
+def format_data(dataset, special_tokens, device, multi_class_len, max_a, max_q, max_s):
+    dataset = filter_len(dataset, max_a, max_q, max_s)
+    inputs = []
+    pos_ids = []
+    token_types = []
+    mc_labels = []
+    mc_tok_ids = []
 
-            full_pos = [1] + s_pos.tolist() + [1] + q_pos.tolist() + [1] + a_pos.tolist() + [1]
-            pos_ids.append(np.array(full_pos))
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # dataset = np.load("/Users/aw678/PycharmProjects/gpt2_QA/dataset_filtered.npy").tolist()
 
-            ### TOKEN TYPES
-            q_tok = np.zeros(max_q)
-            a_tok = np.zeros(max_a)
-            s_tok = np.zeros(max_s)
+    for i in range(0, len(dataset)):
+        story = dataset[i][0]
+        quest = dataset[i][1]
+        answ = dataset[i][2]
 
-            q_tok[0: len(np.array(quest)[curr_idx])] = 6
-            a_tok[0: len(np.array(answ)[curr_idx])] = 7
-            s_tok[0: story_len] = 5
+        r = np.random.randint(0, len(dataset)-1)
+        f_quest = dataset[r][1]
+        f_answ = dataset[r][2]
 
-            full_tok = [1] + s_tok.tolist() + [2] + q_tok.tolist() + [3] + a_tok.tolist() + [4]
-            token_types.append(np.array(full_tok))
+        for idx_qa in range(0, len(answ)):
+            fake_qa_idx = np.random.randint(len(f_answ))
+
+            for k in range(0, multi_class_len):
+
+                option = np.random.rand()
+
+                if k == 0:
+                    full_input, full_pos, full_tok = prep_pad(max_q, max_a, max_s, story, quest[idx_qa], answ[idx_qa], special_tokens, 0)
+                    inputs.append([np.array(full_input)])
+                    pos_ids.append([np.array(full_pos)])
+                    token_types.append([np.array(full_tok)])
+                    ### Multi Class TOKEN IDS
+                    mc_tok_id = [0]
+                    mc_tok_ids.append(mc_tok_id)
+
+                elif k != 0 and option > 0.8:
+                    full_input, full_pos, full_tok = prep_pad(max_q, max_a, max_s, story, f_quest[fake_qa_idx], answ[idx_qa], special_tokens, 1)
+                    inputs[-1].append(np.array(full_input))
+                    pos_ids[-1].append(np.array(full_pos))
+                    token_types[-1].append(np.array(full_tok))
+                    mc_tok_ids[-1].append(0)
+
+                elif k != 0 and option <= 0.8:
+                    full_input, full_pos, full_tok = prep_pad(max_q, max_a, max_s, story, quest[idx_qa], f_answ[fake_qa_idx], special_tokens, 2)
+                    inputs[-1].append(np.array(full_input))
+                    pos_ids[-1].append(np.array(full_pos))
+                    token_types[-1].append(np.array(full_tok))
+                    mc_tok_ids[-1].append(0)
+
 
             ### Multi Class LABEL
             mc_label = np.zeros((1))
             mc_labels.append(mc_label)
 
-            ### Multi Class TOKEN IDS
-            mc_tok_id = np.zeros(1)
-            mc_tok_ids.append(mc_tok_id)
-
-    dataset_filter = np.expand_dims(dataset_filter, axis=1)
-    token_types = np.expand_dims(token_types, axis=1)
-    pos_ids = np.expand_dims(pos_ids, axis=1)
+    # inputs = np.expand_dims(inputs, axis=1)
+    # token_types = np.expand_dims(token_types, axis=1)
+    # pos_ids = np.expand_dims(pos_ids, axis=1)
+    # mc_tok_ids = np.expand_dims(mc_tok_ids, axis=1)
 
     ### Lang Model LABEL
     # Replace the padding of 0 to -1
-    lm_labels = np.copy(dataset_filter)
+    lm_labels = np.copy(inputs)
     lm_labels[np.where(lm_labels == 0)] = -1
 
     tensor_dataset = []
-    inputs = (np.array(dataset_filter), np.array(mc_tok_ids), np.array(lm_labels),  np.array(mc_labels), np.array(token_types), np.array(pos_ids))
-    tensor_dataset.append(tuple(torch.tensor(t, dtype=torch.int64, device=torch.device(device)) for t in inputs))
+    input_tuple = (np.array(inputs), np.array(mc_tok_ids), np.array(lm_labels),  np.array(mc_labels), np.array(token_types), np.array(pos_ids))
+    tensor_dataset.append(tuple(torch.tensor(t, dtype=torch.int64, device=device) for t in input_tuple))
 
     return tensor_dataset[0]
 
@@ -232,7 +297,8 @@ def main():
     d_file.write("\n\nDATE: {}".format(now))
     d_file.write("\n\nUSING THE FOLLOWING ARGS:\n{}".format(args))
 
-    special_tokens = ['<_STR_>', '<_END_>', '<_QUE_>', '<_ANS_>']
+    special_tokens = ['<_S_STORY_>', '<_S_QUE_>', '<_S_ANS_>',
+                      '<_E_STORY_>', '<_E_QUE_>', '<_E_ANS_>']
 
     d_file.write("\n\nSPECIAL TOKENS: {}".format(special_tokens))
     d_file.close()
@@ -242,10 +308,20 @@ def main():
     special_tokens_ids = tokenizer.convert_tokens_to_ids(special_tokens)
     model = GPT2DoubleHeadsModel.from_pretrained(args.model, num_special_tokens=len(special_tokens_ids))
 
+    # Prepare the device to run on
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    n_gpu = torch.cuda.device_count()
+    logger.info("device: {}, n_gpu {}".format(device, n_gpu))
+
     raw_data = load_json_dataset(args.train_dataset)
     token_data = tokenize_and_encode(raw_data, tokenizer)
     # max_s, max_q, max_a = get_max_lengths(token_data)
-    new_data = format_data(token_data, special_tokens_ids)
+    if args.model == "gpt2-medium":
+        # new_data = format_data(token_data, special_tokens_ids, device, multi_class_len=2, max_a=200, max_q=48, max_s=770)
+        new_data = format_data(token_data, special_tokens_ids, device, multi_class_len=2, max_a=150, max_q=48, max_s=564)
+    elif args.model == "gpt2":
+        new_data = format_data(token_data, special_tokens_ids, device, multi_class_len=2, max_a=150, max_q=48, max_s=564)
+
 
     # ======================== Use the pytorch's dataloader to load the input
     train_data = TensorDataset(*new_data)
@@ -267,45 +343,48 @@ def main():
                            weight_decay=args.weight_decay,
                            t_total=num_train_optimization_steps)
 
-    # Prepare the device to run on
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    n_gpu = torch.cuda.device_count()
-    logger.info("device: {}, n_gpu {}".format(device, n_gpu))
 
     # Automatic mixed precision - speeds up the process and shrinks the model size
     # while maintaining full precision accuracy
     # Requirements cuda
+    model = model.to(device)
     if args.amp_opt_lvl:
         from apex import amp  # Apex is only required if we use fp16 training
-        model.to(device)
         model, optimizer = amp.initialize(model, optimizer, opt_level=args.amp_opt_lvl)
 
     if n_gpu > 1: model = torch.nn.DataParallel(model, output_device=device, device_ids=range(torch.cuda.device_count()))
 
+
     if args.do_train:
         all_tr_losses = []
         model.train()
-        model.to(device)
         for _ in trange(int(args.num_train_epochs), desc="Epoch"):
             epoch_losses = []
             past = None
             tqdm_bar = tqdm(train_dataloader, desc="Training")
             # for input_ids, position_ids, lm_labels in train_tensor_data:
             for step, batch in enumerate(tqdm_bar):
-                lm_loss, _mc_loss, _ = model(*batch, past=past)
-                loss = args.lm_coef * lm_loss[0]
+
+                loss, _hidden_states, _ = model(*batch, past=past)
+                loss = args.lm_coef * (loss[0] + loss[1])
                 # Normalise the loss (Simulates average of a batch)
                 loss = loss / args.grad_accumulation_steps
                 if args.amp_opt_lvl:
                     with amp.scale_loss(loss, optimizer) as scaled_loss:
-                        scaled_loss.backward()
+                        if n_gpu >1:
+                            scaled_loss.sum().backward()
+                        else:
+                            scaled_loss.backward()
                 else:
                     loss.backward()
 
                 if (step + 1) % args.grad_accumulation_steps == 0:
                     optimizer.step()
                     optimizer.zero_grad()
-                    epoch_losses.append(loss.item())
+                    if n_gpu > 1:
+                        epoch_losses.append(loss.sum().item())
+                    else:
+                        epoch_losses.append(loss.item())
 
             all_tr_losses.append(epoch_losses)
 
