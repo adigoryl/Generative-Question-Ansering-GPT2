@@ -8,10 +8,10 @@ def makedir(dir_name):
         os.makedirs(dir_name)
 
 
-def load_json_dataset(dataset_path):
+def load_json_dataset(dataset_path, cwd):
     """ Given dataset: (index, song_name, year, artist, genre, lyrics)
         Output a list of tuples(genre, lyrics) """
-    cwd = os.path.dirname(__file__)
+
 
     with open(cwd + "/dataset/" + dataset_path) as data_file:
         data = json.load(data_file)
@@ -93,16 +93,16 @@ def prep_pad(max_q, max_a, max_s, story, question, answer, special_tokens, multi
     a_tok = np.zeros(max_a)
     s_tok = np.zeros(max_s)
 
-    # if multi_class_tag == 0:
-    #     q_tok[0: len(question)] = 6
-    #     a_tok[0: len(answer)] = 7
-    # elif multi_class_tag == 1:
-    #     a_tok[0: len(answer)] = 7
-    # elif multi_class_tag == 2:
-    #     q_tok[0: len(question)] = 6
+    if multi_class_tag == 0:
+        q_tok[0: len(question)] = 6
+        a_tok[0: len(answer)] = 7
+    elif multi_class_tag == 1:
+        a_tok[0: len(answer)] = 7
+    elif multi_class_tag == 2:
+        q_tok[0: len(question)] = 6
 
-    a_tok[0: len(answer)] = 7
-    q_tok[0: len(question)] = 6
+    # a_tok[0: len(answer)] = 7
+    # q_tok[0: len(question)] = 6
     s_tok[0: len(story)] = 5
 
     full_tok = [1] + s_tok.tolist() + [1] + \

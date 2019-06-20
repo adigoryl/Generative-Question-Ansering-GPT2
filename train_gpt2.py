@@ -10,6 +10,7 @@ from torch.utils.data import (DataLoader, RandomSampler, TensorDataset)
 from tqdm import tqdm, trange
 
 import utils.utils as u
+from utils.parallel import DataParallelModel, DataParallelCriterion
 import logging
 import os
 
@@ -22,9 +23,10 @@ logger = logging.getLogger(__name__)
 def init_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--run_des", default="LM + pos_id", type=str, help="Description to help identify the run")
-    parser.add_argument("--model", default="gpt2-medium", type=str, help="Model name i.e.: gpt2, gpt2-medium")
+    parser.add_argument("--model", default="gpt2", type=str, help="Model name i.e.: gpt2, gpt2-medium")
     parser.add_argument("--do_train", type=bool, default=True)
     parser.add_argument('--train_dataset', type=str, default='', required=True)
+    parser.add_argument('--multi_class_len', type=int, default=2)
     parser.add_argument('--grad_accumulation_steps', type=int, default=1, help="This is equivalent to batch size, if the GPU has limited memory")
     parser.add_argument('--eval_steps', type=int, default=5)
     parser.add_argument('--seed', type=int, default=42)
@@ -71,7 +73,11 @@ def format_data(dataset, special_tokens, device, multi_class_len, max_a, max_q, 
                     pos_ids.append([np.array(full_pos)])
                     token_types.append([np.array(full_tok)])
                     ### Multi Class TOKEN IDS
-                    mc_tok_id = [0]
+                    if option > 0.8:
+                        mc_tok_id = [np.where(np.array(full_input)==special_tokens[1])[0][0]]
+                    elif option <= 0.8:
+                        mc_tok_id = [np.where(np.array(full_input)==special_tokens[2])[0][0]]
+
                     mc_tok_ids.append(mc_tok_id)
 
                 elif k != 0 and option > 0.8:
@@ -79,14 +85,14 @@ def format_data(dataset, special_tokens, device, multi_class_len, max_a, max_q, 
                     inputs[-1].append(np.array(full_input))
                     pos_ids[-1].append(np.array(full_pos))
                     token_types[-1].append(np.array(full_tok))
-                    mc_tok_ids[-1].append(0)
+                    mc_tok_ids[-1].append(np.where(np.array(full_input)==special_tokens[1])[0][0])
 
                 elif k != 0 and option <= 0.8:
                     full_input, full_pos, full_tok = u.prep_pad(max_q, max_a, max_s, story, quest[idx_qa], f_answ[fake_qa_idx], special_tokens, 2)
                     inputs[-1].append(np.array(full_input))
                     pos_ids[-1].append(np.array(full_pos))
                     token_types[-1].append(np.array(full_tok))
-                    mc_tok_ids[-1].append(0)
+                    mc_tok_ids[-1].append(np.where(np.array(full_input)==special_tokens[2])[0][0])
 
             ### Multi Class LABEL
             mc_label = np.zeros((1))
@@ -109,7 +115,7 @@ def main():
     # ======================== PATH AND FILES CONSTRUCTION
     now = datetime.datetime.now().strftime("%d-%m-%Y@%H'%M")
     current_dir = os.path.dirname(__file__)
-    log_path = "{}/finetuned_models/test/{}_{}_z1".format(current_dir, args.model, now)
+    log_path = "{}/finetuned_models/test1/{}_{}".format(current_dir, args.model, now)
     u.makedir(log_path)
     run_details_file = os.path.join(log_path, "run_details.txt")
 
@@ -144,14 +150,15 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     n_gpu = torch.cuda.device_count()
     logger.info("device: {}, n_gpu {}".format(device, n_gpu))
+    cwd = os.path.dirname(__file__)
 
-    raw_data = u.load_json_dataset(args.train_dataset)
+    raw_data = u.load_json_dataset(args.train_dataset, cwd)
     token_data = u.tokenize_and_encode(raw_data, tokenizer)
     # max_s, max_q, max_a = u.get_max_lengths(token_data)
     if args.model == "gpt2-medium":
-        new_data = format_data(token_data, special_tokens_ids, device, multi_class_len=2, max_a=200, max_q=48, max_s=770)
+        new_data = format_data(token_data, special_tokens_ids, device, multi_class_len=args.multi_class_len, max_a=200, max_q=48, max_s=770)
     elif args.model == "gpt2":
-        new_data = format_data(token_data, special_tokens_ids, device, multi_class_len=2, max_a=150, max_q=48, max_s=564)
+        new_data = format_data(token_data, special_tokens_ids, device, multi_class_len=args.multi_class_len, max_a=150, max_q=48, max_s=564)
 
 
     # ======================== Use the pytorch's dataloader to load the input

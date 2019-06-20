@@ -63,8 +63,8 @@ def run_model():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, default="gpt2", help='pretrained model name or path to local checkpoint')
     parser.add_argument('--load_model_path', type=str, default="/Users/aw678/PycharmProjects/gpt2_QA/finetuned_models/test/gpt2_18-06-2019@22'35_z1/model/")
-    # parser.add_argument("--seed", type=int, default=1)
-    parser.add_argument("--seed", type=int, default=np.random.randint(0,100))
+    # parser.add_argument("--seed", type=int, default=2)
+    parser.add_argument("--seed", type=int, default=np.random.randint(0, 100))
     parser.add_argument("--nsamples", type=int, default=1)
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--length", type=int, default=20)
@@ -137,11 +137,11 @@ def run_model():
             question_text = "Where did Cotton live?"
             answer_text = ""
 
-            story_text = "Adrian has five cats, where two are white and three and black."
-            question_text = "How many white cats does Adrian have?"
+            # story_text = "Adrian has five cats, where two are white and three and black."
+            # question_text = "How many white cats does Adrian have?"
 
-            story_text = "Patrick works as a teacher at the university of Kent."
-            question_text = "Where does Patrick work?"
+            # story_text = "Patrick works as a teacher at the university of Kent."
+            # question_text = "Where does Patrick work?"
 
             special_token_ids = enc.convert_tokens_to_ids(special_tokens)
 
