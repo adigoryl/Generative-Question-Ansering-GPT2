@@ -8,570 +8,15 @@ from tqdm import trange
 import torch
 import torch.nn.functional as F
 import numpy as np
+import utils.utils as u
 
 from pytorch_pretrained_bert import GPT2LMHeadModel, GPT2DoubleHeadsModel, GPT2Config, GPT2Tokenizer
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s', datefmt='%m/%d/%Y %H:%M:%S', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def top_k_logits(logits, k):
-    """
-    Masks everything but the k top entries as -infinity (1e10).
-    Used to mask logits such that e^-infinity -> 0 won't contribute to the
-    sum of the denominator.
-    """
-    if k == 0:
-        return logits
-    else:
-        values = torch.topk(logits, k)[0]
-        batch_mins = values[:, -1].view(-1, 1).expand_as(logits)
-        return torch.where(logits < batch_mins, torch.ones_like(logits) * -1e10, logits)
 
-
-def format_data6(dataset, special_tokens, max_a=200, max_q=50, max_s=770):
-    dataset_filter = []
-
-    pos_ids = []
-    token_types = []
-    mc_labels = []
-    mc_tok_ids = []
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    for i in range(0, len(dataset)):
-        story = dataset[i][0]
-        quest = dataset[i][1]
-        answ = dataset[i][2]
-        story_len = len(story)
-
-        # If story greater in len -> escape the loop / get rid of this data input
-        if story_len > max_s:
-            continue
-
-        q_idx_arr = []
-        a_idx_arr = []
-
-        # Check if Questions or Answers length satisfies
-        for j in range(0, len(answ)):
-
-            q_pad = max_q - len(quest[j])
-            if q_pad >= 0:
-                q_idx_arr.append(j)
-
-            a_pad = max_a - len(answ[j])
-            if a_pad >= 0:
-                a_idx_arr.append(j)
-
-        # Get only overlapping indexes -> this means an input index satisfied the story, question and answer maximum length
-        all_idx = np.intersect1d(q_idx_arr, a_idx_arr)
-
-        for curr_idx in all_idx:
-            local_story = story
-
-            ### DATA
-            q = np.zeros(max_q)
-            a = np.zeros(max_a)
-            s = np.zeros(max_s)
-
-            q[0: len(np.array(quest)[curr_idx])] = np.array(quest[curr_idx])
-            a[0: len(np.array(answ)[curr_idx])] = np.array(answ[curr_idx])
-            s[0: story_len] = np.array(local_story)
-
-            full_input = [special_tokens[0]] + s.tolist() + [special_tokens[2]] + q.tolist() + [special_tokens[3]] + a.tolist()
-            dataset_filter.append(np.array(full_input))
-
-            ### ANSWER IN STORY SPAN PADDING
-            q_pos = np.zeros(max_q)
-            a_pos = np.zeros(max_a)
-            s_pos = np.zeros(max_s)
-
-            q_pos[0: len(np.array(quest)[curr_idx])] = 5
-            a_pos[0: len(np.array(answ)[curr_idx])] = 10
-            # # s_pos[span_idxs[curr_idx][0][0]:span_idxs[curr_idx][0][1]] = 10
-            #
-            # s_pos[int(span_idxs[curr_idx][0]*story_len):int(span_idxs[curr_idx][1]*story_len)] = 10
-            # # s_pos[int(span_idxs[curr_idx][0]*story_len)] = 5
-
-            full_pos = [1] + s_pos.tolist() + [1] + q_pos.tolist() + [1] + a_pos.tolist()
-            pos_ids.append(np.array(full_pos))
-
-            ### TOKEN TYPES
-            q_tok = np.zeros(max_q)
-            a_tok = np.zeros(max_a)
-            s_tok = np.zeros(max_s)
-
-            q_tok[0: len(np.array(quest)[curr_idx])] = 6
-            a_tok[0: len(np.array(answ)[curr_idx])] = 7
-            s_tok[0: story_len] = 5
-
-            full_tok = [1] + s_tok.tolist() + [2] + q_tok.tolist() + [3] + a_tok.tolist()
-            token_types.append(np.array(full_tok))
-
-
-    dataset_filter = np.expand_dims(dataset_filter, axis=1)
-    token_types = np.expand_dims(token_types, axis=1)
-    pos_ids = np.expand_dims(pos_ids, axis=1)
-
-    tensor_dataset = []
-    inputs = (np.array(dataset_filter), np.array(token_types), np.array(pos_ids))
-    tensor_dataset.append(tuple(torch.tensor(t, dtype=torch.int64, device=torch.device(device)) for t in inputs))
-    new_word_index = 1 + max_s + 1 + max_q + 1 + len(answ[0])-1
-
-    return tensor_dataset[0], new_word_index
-
-
-def format_data4(dataset, special_tokens, max_a=200, max_q=50, max_s=770):
-    dataset_filter = []
-
-    pos_ids = []
-    token_types = []
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    for i in range(0, len(dataset)):
-        story = dataset[i][0]
-        quest = dataset[i][1]
-        answ = dataset[i][2]
-
-        story_len = len(story)
-
-        # If story greater in len -> escape the loop / get rid of this data input
-        if story_len > max_s:
-            continue
-
-        q_idx_arr = []
-        a_idx_arr = []
-
-        # Check if Questions or Answers length satisfies
-        for j in range(0, len(answ)):
-
-            q_pad = max_q - len(quest[j])
-            if q_pad >= 0:
-                q_idx_arr.append(j)
-
-            a_pad = max_a - len(answ[j])
-            if a_pad >= 0:
-                a_idx_arr.append(j)
-
-        # Get only overlapping indexes -> this means an input index satisfied the story, question and answer maximum length
-        all_idx = np.intersect1d(q_idx_arr, a_idx_arr)
-        new_word_index = 0
-        for curr_idx in all_idx:
-            ### DATA
-            q = np.zeros(len(np.array(quest)[curr_idx]))
-            a = np.zeros(len(np.array(answ)[curr_idx]))
-            s = np.zeros(story_len)
-
-            q[0: len(np.array(quest)[curr_idx])] = np.array(quest)[curr_idx]
-            a[0: len(np.array(answ)[curr_idx])] = np.array(answ)[curr_idx]
-            s[0: story_len] = np.array(story)
-
-            full_input = [special_tokens[0]] + s.tolist() + [special_tokens[2]] + q.tolist() + [special_tokens[3]] + a.tolist()
-            dataset_filter.append(np.array(full_input))
-
-            ### POSITION IDS
-            q_pos = np.arange(len(np.array(quest)[curr_idx])) + 2
-            a_pos = np.arange(len(np.array(answ)[curr_idx])) + 2
-            s_pos = np.arange(story_len) + 2
-
-            # q_pos[len(np.array(quest)[curr_idx]):max_q] = 0
-            # a_pos[len(np.array(answ)[curr_idx]):max_a] = 0
-            # s_pos[story_len:max_s] = 0
-
-            full_pos = [1] + s_pos.tolist() + [1] + q_pos.tolist() + [1] + a_pos.tolist()
-            pos_ids.append(np.array(full_pos))
-
-            ### TOKEN TYPES
-            q_tok = np.zeros(len(np.array(quest)[curr_idx]))
-            a_tok = np.zeros(len(np.array(answ)[curr_idx]))
-            s_tok = np.zeros(story_len)
-
-            q_tok[0: len(np.array(quest)[curr_idx])] = 6
-            a_tok[0: len(np.array(answ)[curr_idx])] = 7
-            s_tok[0: story_len] = 5
-
-            full_tok = [1] + s_tok.tolist() + [2] + q_tok.tolist() + [3] + a_tok.tolist()
-            token_types.append(np.array(full_tok))
-
-            new_word_index = 1 + story_len + 1 + len(np.array(quest)[curr_idx]) + 1 +len(np.array(answ)[curr_idx])-1
-
-    dataset_filter = np.expand_dims(dataset_filter, axis=1)
-    token_types = np.expand_dims(token_types, axis=1)
-    pos_ids = np.expand_dims(pos_ids, axis=1)
-
-    tensor_dataset = []
-    inputs = (np.array(dataset_filter), np.array(token_types), np.array(pos_ids))
-    tensor_dataset.append(tuple(torch.tensor(t, dtype=torch.int64, device=torch.device(device)) for t in inputs))
-
-    # new_word_index = 1 + max_s + 1 + max_q + 1 + len(answ[0])-1
-
-    return tensor_dataset[0], new_word_index
-
-
-def format_data3(dataset, special_tokens, max_a=200, max_q=50, max_s=770):
-    dataset_filter = []
-
-    pos_ids = []
-    token_types = []
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    for i in range(0, len(dataset)):
-        story = dataset[i][0]
-        quest = dataset[i][1]
-        answ = dataset[i][2]
-
-        story_len = len(story)
-
-        # If story greater in len -> escape the loop / get rid of this data input
-        if story_len > max_s:
-            continue
-
-        q_idx_arr = []
-        a_idx_arr = []
-
-        # Check if Questions or Answers length satisfies
-        for j in range(0, len(answ)):
-
-            q_pad = max_q - len(quest[j])
-            if q_pad >= 0:
-                q_idx_arr.append(j)
-
-            a_pad = max_a - len(answ[j])
-            if a_pad >= 0:
-                a_idx_arr.append(j)
-
-        # Get only overlapping indexes -> this means an input index satisfied the story, question and answer maximum length
-        all_idx = np.intersect1d(q_idx_arr, a_idx_arr)
-
-        for curr_idx in all_idx:
-            ### DATA
-            q = np.zeros(max_q)
-            a = np.zeros(len(np.array(answ)[curr_idx]))
-            s = np.zeros(max_s)
-
-            q[0: len(np.array(quest)[curr_idx])] = np.array(quest)[curr_idx]
-            a[0: len(np.array(answ)[curr_idx])] = np.array(answ)[curr_idx]
-            s[0: story_len] = np.array(story)
-
-            full_input = [special_tokens[0]] + s.tolist() + [special_tokens[2]] + q.tolist() + [special_tokens[3]] + a.tolist()
-            dataset_filter.append(np.array(full_input))
-
-            ### POSITION IDS
-            q_pos = np.arange(max_q) + 2
-            a_pos = np.arange(len(np.array(answ)[curr_idx])) + 2
-            s_pos = np.arange(max_s) + 2
-
-            q_pos[len(np.array(quest)[curr_idx]):max_q] = 0
-            a_pos[len(np.array(answ)[curr_idx]):max_a] = 0
-            s_pos[story_len:max_s] = 0
-
-            full_pos = [1] + s_pos.tolist() + [1] + q_pos.tolist() + [1] + a_pos.tolist()
-            pos_ids.append(np.array(full_pos))
-
-            ### TOKEN TYPES
-            q_tok = np.zeros(max_q)
-            a_tok = np.zeros(len(np.array(answ)[curr_idx]))
-            s_tok = np.zeros(max_s)
-
-            q_tok[0: len(np.array(quest)[curr_idx])] = 6
-            a_tok[0: len(np.array(answ)[curr_idx])] = 7
-            s_tok[0: story_len] = 5
-
-            full_tok = [1] + s_tok.tolist() + [2] + q_tok.tolist() + [3] + a_tok.tolist()
-            token_types.append(np.array(full_tok))
-
-
-    dataset_filter = np.expand_dims(dataset_filter, axis=1)
-    token_types = np.expand_dims(token_types, axis=1)
-    pos_ids = np.expand_dims(pos_ids, axis=1)
-
-    tensor_dataset = []
-    inputs = (np.array(dataset_filter), np.array(token_types), np.array(pos_ids))
-    tensor_dataset.append(tuple(torch.tensor(t, dtype=torch.int64, device=torch.device(device)) for t in inputs))
-
-    new_word_index = 1 + max_s + 1 + max_q + 1 + len(answ[0])-1
-
-    return tensor_dataset[0], new_word_index
-
-
-def format_data5(dataset, special_tokens, max_a=200, max_q=50, max_s=770):
-    dataset_filter = []
-
-    pos_ids = []
-    token_types = []
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    for i in range(0, len(dataset)):
-        story = dataset[i][0]
-        quest = dataset[i][1]
-        answ = dataset[i][2]
-
-        story_len = len(story)
-
-        # If story greater in len -> escape the loop / get rid of this data input
-        if story_len > max_s:
-            continue
-
-        q_idx_arr = []
-        a_idx_arr = []
-
-        # Check if Questions or Answers length satisfies
-        for j in range(0, len(answ)):
-
-            q_pad = max_q - len(quest[j])
-            if q_pad >= 0:
-                q_idx_arr.append(j)
-
-            a_pad = max_a - len(answ[j])
-            if a_pad >= 0:
-                a_idx_arr.append(j)
-
-        # Get only overlapping indexes -> this means an input index satisfied the story, question and answer maximum length
-        all_idx = np.intersect1d(q_idx_arr, a_idx_arr)
-
-        for curr_idx in all_idx:
-            ### DATA
-            q = np.zeros(max_q)
-            a = np.zeros(len(np.array(answ)[curr_idx]))
-            s = np.zeros(max_s)
-
-            q[0: len(np.array(quest)[curr_idx])] = np.array(quest)[curr_idx]
-            a[0: len(np.array(answ)[curr_idx])] = np.array(answ)[curr_idx]
-            s[0: story_len] = np.array(story)
-
-            full_input = [special_tokens[0]] + s.tolist() + [special_tokens[2]] + q.tolist() + [special_tokens[3]] + a.tolist()
-            dataset_filter.append(np.array(full_input))
-
-            ### POSITION IDS
-            q_pos = np.zeros(max_q)
-            a_pos = np.zeros(len(np.array(answ)[curr_idx]))
-            s_pos = np.zeros(max_s)
-
-            # q_pos[len(np.array(quest)[curr_idx]):max_q] = 0
-            # a_pos[len(np.array(answ)[curr_idx]):max_a] = 0
-            # s_pos[story_len:max_s] = 0
-
-            full_pos = [1] + s_pos.tolist() + [2] + q_pos.tolist() + [3] + a_pos.tolist()
-            pos_ids.append(np.array(full_pos))
-
-            ### TOKEN TYPES
-            q_tok = np.zeros(max_q)
-            a_tok = np.zeros(len(np.array(answ)[curr_idx]))
-            s_tok = np.zeros(max_s)
-
-            q_tok[0: len(np.array(quest)[curr_idx])] = 2
-            a_tok[0: len(np.array(answ)[curr_idx])] = 3
-            s_tok[0: story_len] = 1
-
-            full_tok = [5] + s_tok.tolist() + [5] + q_tok.tolist() + [5] + a_tok.tolist()
-            token_types.append(np.array(full_tok))
-
-
-    dataset_filter = np.expand_dims(dataset_filter, axis=1)
-    token_types = np.expand_dims(token_types, axis=1)
-    pos_ids = np.expand_dims(pos_ids, axis=1)
-
-    tensor_dataset = []
-    inputs = (np.array(dataset_filter), np.array(token_types), np.array(pos_ids))
-    tensor_dataset.append(tuple(torch.tensor(t, dtype=torch.int64, device=torch.device(device)) for t in inputs))
-
-    new_word_index = 1 + max_s + 1 + max_q + 1 + len(answ[0])-1
-
-    return tensor_dataset[0], new_word_index
-
-
-def format_data2(dataset, special_tokens, max_a=200, max_q=50, max_s=770):
-    dataset_filter = []
-    pos_ids = []
-    token_types = []
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    for i in range(0, len(dataset)):
-        story = dataset[i][0]
-        quest = dataset[i][1]
-        answ = dataset[i][2]
-
-        story_len = len(story)
-
-        # If story greater in len -> escape the loop / get rid of this data input
-        if story_len > max_s:
-            continue
-
-        q_idx_arr = []
-        a_idx_arr = []
-
-        # Check if Questions or Answers length satisfies
-        for j in range(0, len(answ)):
-
-            q_pad = max_q - len(quest[j])
-            if q_pad >= 0:
-                q_idx_arr.append(j)
-
-            a_pad = max_a - len(answ[j])
-            if a_pad >= 0:
-                a_idx_arr.append(j)
-
-        # Get only overlapping indexes -> this means an input index satisfied the story, question and answer maximum length
-        all_idx = np.intersect1d(q_idx_arr, a_idx_arr)
-
-        for curr_idx in all_idx:
-            ### DATA
-            q = np.zeros(max_q)
-            a = np.zeros(max_a)
-            s = np.zeros(max_s)
-
-            q[0: len(np.array(quest)[curr_idx])] = np.array(quest)[curr_idx]
-            a[0: len(np.array(answ)[curr_idx])] = np.array(answ)[curr_idx]
-            s[0: story_len] = np.array(story)
-
-            full_input = [special_tokens[0]] + s.tolist() + [special_tokens[2]] + q.tolist() + [special_tokens[3]] + a.tolist() + [special_tokens[1]]
-            dataset_filter.append(np.array(full_input))
-
-            ### POSITION IDS
-            q_pos = np.arange(max_q) + 2
-            a_pos = np.arange(max_a) + 2
-            s_pos = np.arange(max_s) + 2
-
-            q_pos[len(np.array(quest)[curr_idx]):max_q] = 0
-            a_pos[len(np.array(answ)[curr_idx]):max_a] = 0
-            s_pos[story_len:max_s] = 0
-
-            full_pos = [1] + s_pos.tolist() + [1] + q_pos.tolist() + [1] + a_pos.tolist() + [1]
-            pos_ids.append(np.array(full_pos))
-
-            ### TOKEN TYPES
-            q_tok = np.zeros(max_q)
-            a_tok = np.zeros(max_a)
-            s_tok = np.zeros(max_s)
-
-            q_tok[0: len(np.array(quest)[curr_idx])] = 6
-            a_tok[0: len(np.array(answ)[curr_idx])] = 7
-            s_tok[0: story_len] = 5
-
-            full_tok = [1] + s_tok.tolist() + [2] + q_tok.tolist() + [3] + a_tok.tolist() + [4]
-            token_types.append(np.array(full_tok))
-
-    dataset_filter = np.expand_dims(dataset_filter, axis=1)
-    token_types = np.expand_dims(token_types, axis=1)
-    pos_ids = np.expand_dims(pos_ids, axis=1)
-
-    tensor_dataset = []
-    inputs = (np.array(dataset_filter), np.array(token_types), np.array(pos_ids))
-    tensor_dataset.append(tuple(torch.tensor(t, dtype=torch.int64, device=torch.device(device)) for t in inputs))
-
-    new_word_index = 1 + max_s + 1 + max_q + 1 + len(answ[0])-1
-
-    return tensor_dataset[0], new_word_index
-
-
-def format_data(dataset, special_tokens, max_a=200, max_q=50, max_s=770):
-
-    dataset_filter = []
-    pos_ids = []
-    token_types = []
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    for i in range(0, len(dataset)):
-        story = dataset[i][0]
-        quest = dataset[i][1]
-        answ = dataset[i][2]
-
-        story_len = len(story)
-
-        # If story greater in len -> escape the loop / get rid of this data input
-        if story_len > max_s:
-            continue
-
-        q_idx_arr = []
-        a_idx_arr = []
-
-        # Check if Questions or Answers length satisfies
-        for j in range(0, len(quest)):
-
-            q_pad = max_q - len(quest[j])
-            if q_pad >= 0:
-                q_idx_arr.append(j)
-
-            a_pad = max_a - len(answ[j])
-            if a_pad >= 0:
-                a_idx_arr.append(j)
-
-        # Get only overlapping indexes -> this means an input index satisfied the story, question and answer maximum length
-        all_idx = np.intersect1d(q_idx_arr, a_idx_arr)
-
-        for curr_idx in all_idx:
-            ### DATA
-            q = np.zeros(max_q)
-            a = np.zeros(max_a)
-            s = np.zeros(max_s)
-
-            q[0: len(np.array(quest)[curr_idx])] = np.array(quest)[curr_idx]
-            a[0: len(np.array(answ)[curr_idx])] = np.array(answ)[curr_idx]
-            s[0: story_len] = np.array(story)
-
-            full_input = [special_tokens[0]] + s.tolist() + [special_tokens[2]] + q.tolist() + [special_tokens[3]] + a.tolist() + [special_tokens[1]]
-            dataset_filter.append(np.array(full_input))
-
-            ### POSITION IDS
-            q_pos = np.arange(max_q) + 1
-            a_pos = np.arange(max_a) + 1
-            s_pos = np.arange(max_s) + 1
-
-            q_pos[len(np.array(quest)[curr_idx]):max_q] = 0
-            a_pos[len(np.array(answ)[curr_idx]):max_a] = 0
-            s_pos[story_len:max_s] = 0
-
-            full_pos = [0] + s_pos.tolist() + [0] + q_pos.tolist() + [0] + a_pos.tolist() + [0]
-            pos_ids.append(np.array(full_pos))
-
-            ### TOKEN TYPES
-            q_tok = np.zeros(max_q)
-            a_tok = np.zeros(max_a)
-            s_tok = np.zeros(max_s)
-
-            q_tok[len(np.array(quest)[curr_idx]):max_q] = 2
-            a_tok[len(np.array(answ)[curr_idx]):max_a] = 3
-            s_tok[story_len:max_s] = 1
-
-            full_tok = [0] + s_tok.tolist() + [0] + q_tok.tolist() + [0] + a_tok.tolist() + [0]
-            token_types.append(np.array(full_tok))
-
-    dataset_filter = np.expand_dims(dataset_filter, axis=1)
-    token_types = np.expand_dims(token_types, axis=1)
-    pos_ids = np.expand_dims(pos_ids, axis=1)
-
-    tensor_dataset = []
-    inputs = (np.array(dataset_filter), np.array(token_types), np.array(pos_ids))
-    tensor_dataset.append(tuple(torch.tensor(t, dtype=torch.int64, device=torch.device(device)) for t in inputs))
-
-    new_word_index = 1 + max_s + 1 + max_q + 1 + len(answ[0])-1
-
-    return tensor_dataset[0], new_word_index
-
-
-def sample_word(model, inputs=None, special_tokens=None, temperature=1, top_k=0, sample=True):
-
-    past = None
-    with torch.no_grad():
-        context, new_word_index = format_data6(inputs, special_tokens)
-        hid_states, presents = model(*context, past=past)
-        hid_states = hid_states[0, 0, new_word_index, :] / temperature
-        hid_states = top_k_logits(hid_states, k=top_k)
-        log_probs = F.softmax(hid_states, dim=-1)
-
-        if sample:
-            new_word = torch.multinomial(log_probs, num_samples=1)
-        else:
-            _, new_word = torch.topk(log_probs, k=5, dim=-1)
-
-    return new_word.item()
-
-
-def top_k_top_p_filtering(logits, top_k=0, top_p=0.0, filter_value=-float('Inf')):
+def top_k_top_p_filtering(logits, top_k=0, top_p=0.9, filter_value=-float('Inf')):
     """ Filter a distribution of logits using top-k and/or nucleus (top-p) filtering
         Args:
             logits: logits distribution shape (vocabulary size)
@@ -599,61 +44,55 @@ def top_k_top_p_filtering(logits, top_k=0, top_p=0.0, filter_value=-float('Inf')
         logits[indices_to_remove] = filter_value
     return logits
 
-# # Here is how to use this function for top-p sampling
-# temperature = 1.0
-# top_k = 0
-# top_p = 0.9
-#
-# # Get logits with a forward pass in our model (input is pre-defined)
-# logits = model(input)
-#
-# # Keep only the last token predictions of the first batch item (batch size 1), apply a temperature coefficient and filter
-# logits = logits[0, -1, :] / temperature
-# filtered_logits = top_k_top_p_filtering(logits, top_k=top_k, top_p=top_p)
-#
-# # Sample from the filtered distribution
-# probabilities = F.softmax(filtered_logits, dim=-1)
-# next_token = torch.multinomial(probabilities, 1)
+
+def sample_word(model, context, new_word_index=0, temperature=1):
+
+    past = None
+    with torch.no_grad():
+
+        lm_logits, _presents, _hid_states = model(*context, past=past)
+        lm_logits = lm_logits[new_word_index, :] / temperature
+        lm_logits = top_k_top_p_filtering(lm_logits)
+        log_probs = F.softmax(lm_logits, dim=-1)
+        new_word = torch.multinomial(log_probs, num_samples=1)
+
+    return new_word.item()
 
 
 def run_model():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model_name_or_path', type=str, default="gpt2", help='pretrained model name or path to local checkpoint')
-    parser.add_argument('--load_model_path', type=str, default="/Users/aw678/PycharmProjects/gpt2_QA/finetuned_models/test/gpt2_02-06-2019@15'34_z1/model/")
-    # parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument('--model', type=str, default="gpt2", help='pretrained model name or path to local checkpoint')
+    parser.add_argument('--load_model_path', type=str, default="/Users/aw678/PycharmProjects/gpt2_QA/finetuned_models/test/gpt2_18-06-2019@22'35_z1/model/")
+    # parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--seed", type=int, default=np.random.randint(0,100))
     parser.add_argument("--nsamples", type=int, default=1)
     parser.add_argument("--batch_size", type=int, default=1)
-    parser.add_argument("--length", type=int, default=10)
+    parser.add_argument("--length", type=int, default=20)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top_k", type=int, default=0)
     parser.add_argument('--unconditional', type=bool, default=False, help='If true, unconditional generation.')
     parser.add_argument('--special_tag', type=str, default='<_ROCK_>', help='If unconditional, this tag will be used to initiate the generation')
 
     args = parser.parse_args()
-    print(args)
-
-    if args.batch_size == -1:
-        args.batch_size = 1
-    assert args.nsamples % args.batch_size == 0
+    logger.info(args)
 
     np.random.seed(args.seed)
     torch.random.manual_seed(args.seed)
     torch.cuda.manual_seed(args.seed)
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # enc = GPT2Tokenizer.from_pretrained(args.model_name_or_path)
-    model = GPT2LMHeadModel.from_pretrained(args.model_name_or_path)
+    model = GPT2LMHeadModel.from_pretrained(args.model)
     model_dict = model.state_dict()
 
     # Prepare paths and file names
     output_model_file = os.path.join(args.load_model_path, "pytorch_model.bin")
     output_config_file = os.path.join(args.load_model_path, "config_file.bin")
 
-    # Load fine-tuned model and used volcabulary
-    special_tokens = ['<_STR_>', '<_END_>', '<_QUE_>', '<_ANS_>']
-    # enc = GPT2Tokenizer(output_vocab_file, output_merges_file, special_tokens=special_tokens)
-    enc = GPT2Tokenizer.from_pretrained(args.model_name_or_path, special_tokens=special_tokens)
+    special_tokens = ['<_S_STORY_>', '<_S_QUE_>', '<_S_ANS_>',
+                      '<_E_STORY_>', '<_E_QUE_>', '<_E_ANS_>']
+
+    enc = GPT2Tokenizer.from_pretrained(args.model, special_tokens=special_tokens)
 
     # Filter out the multi-classification weights
     config = GPT2Config.from_json_file(output_config_file)
@@ -667,13 +106,8 @@ def run_model():
     pretrained_model.to(device)
     pretrained_model.eval()
 
-    if args.length == -1:
-        args.length = model.config.n_ctx
-    elif args.length > model.config.n_ctx:
-        raise ValueError("Can't get samples longer than window size: %s" % model.config.n_ctx)
-
-    while True:
-        context_tokens = []
+    KEEP_GENERATING = True
+    while KEEP_GENERATING:
         if not args.unconditional:
             # story_text = input("Story input >>> ")
             # while not story_text:
@@ -703,28 +137,48 @@ def run_model():
             question_text = "Where did Cotton live?"
             answer_text = ""
 
+            story_text = "Adrian has five cats, where two are white and three and black."
+            question_text = "How many white cats does Adrian have?"
+
+            story_text = "Patrick works as a teacher at the university of Kent."
+            question_text = "Where does Patrick work?"
+
             special_token_ids = enc.convert_tokens_to_ids(special_tokens)
 
-            story_text = enc.convert_tokens_to_ids(enc.tokenize(story_text))
-            question_text = enc.convert_tokens_to_ids(enc.tokenize(question_text))
-            answer_text = enc.convert_tokens_to_ids(enc.tokenize(answer_text))
+            story_ids = enc.convert_tokens_to_ids(enc.tokenize(story_text))
+            question_ids = enc.convert_tokens_to_ids(enc.tokenize(question_text))
+            answer_ids = enc.convert_tokens_to_ids(enc.tokenize(answer_text))
 
-            inputs = []
-            inputs.append((story_text, [question_text], [answer_text]))
+            if args.model == "gpt2-medium":
+                full_input, full_pos, full_tok = u.prep_pad(48, 200, 770, story_ids, question_ids, answer_ids, special_token_ids, 0)
+            elif args.model == "gpt2":
+                full_input, full_pos, full_tok = u.prep_pad(len(question_ids), len(answer_ids), len(story_ids), story_ids, question_ids, answer_ids, special_token_ids, 0)
 
-            for _ in trange(args.length):
-                new_word_ids = sample_word(
+            flag = np.where(np.array(full_input) == special_token_ids[2])[0][0]
+            full_input = full_input[0:flag+1]
+            full_pos = full_pos[0:flag+1]
+            full_tok = full_tok[0:flag+1]
+
+            for word_idx in trange(args.length):
+                new_word_id = sample_word(
                     model=pretrained_model,
-                    inputs=inputs,
-                    special_tokens=special_token_ids,
-                    temperature=args.temperature, top_k=args.top_k
+                    context=torch.tensor((full_input, full_pos, full_tok), dtype=torch.int64),
+                    new_word_index=flag+word_idx,
+                    temperature=args.temperature,
                 )
-                inputs[0][2][0].append(new_word_ids)
-                # print(enc.decode(new_word_ids.tolist()))
 
-            answer = enc.decode(inputs[0][2][0], skip_special_tokens=False)
-            print(answer)
-            print("=" * 80)
+                full_input.append(new_word_id)
+                full_pos.append(word_idx)
+                full_tok.append(7)
+
+                if new_word_id == special_token_ids[5]:
+                    KEEP_GENERATING = False
+
+            full_model_input = enc.decode(full_input, skip_special_tokens=False)
+            answer = enc.decode(full_input[flag+1:-1], skip_special_tokens=False)
+            # print(answer)
+            print("Full_model_input: {}\nStory: {}\nQuestion: {}\nAnswer: {}".format(full_model_input, story_text, question_text, answer))
+            # print("=" * 80)
             break
 
         if args.unconditional:
@@ -744,6 +198,7 @@ def run_model():
             print("=" * 80)
             if args.unconditional:
                   break
+
 
 if __name__ == '__main__':
     run_model()
