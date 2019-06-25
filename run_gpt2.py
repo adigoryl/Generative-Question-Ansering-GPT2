@@ -16,7 +16,7 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message
 logger = logging.getLogger(__name__)
 
 
-def top_k_top_p_filtering(logits, top_k=0, top_p=0.9, filter_value=-float('Inf')):
+def top_k_top_p_filtering(logits, top_k=100, top_p=0.90, filter_value=-float('Inf')):
     """ Filter a distribution of logits using top-k and/or nucleus (top-p) filtering
         Args:
             logits: logits distribution shape (vocabulary size)
@@ -49,9 +49,11 @@ def sample_word(model, context, new_word_index=0, temperature=1):
 
     past = None
     with torch.no_grad():
-
         lm_logits, _presents, _hid_states = model(*context, past=past)
+        # lm_logits, _presents, _hid_states = model(context)
         lm_logits = lm_logits[new_word_index, :] / temperature
+        # lm_logits2 = lm_logits[new_word_index+1, :] / temperature
+        # lm_logits = lm_logits + lm_logits2
         lm_logits = top_k_top_p_filtering(lm_logits)
         log_probs = F.softmax(lm_logits, dim=-1)
         new_word = torch.multinomial(log_probs, num_samples=1)
@@ -62,10 +64,11 @@ def sample_word(model, context, new_word_index=0, temperature=1):
 def run_model():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, default="gpt2", help='pretrained model name or path to local checkpoint')
-    parser.add_argument('--load_model_path', type=str, default="/Users/aw678/PycharmProjects/gpt2_QA/finetuned_models/test/gpt2_18-06-2019@22'35_z1/model/")
-    # parser.add_argument("--seed", type=int, default=2)
+    parser.add_argument('--load_model_path', type=str, default="/Users/aw678/PycharmProjects/gpt2_QA/finetuned_models/test1/gpt2_20-06-2019@22'02/model/")
+    # parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--seed", type=int, default=np.random.randint(0, 100))
     parser.add_argument("--nsamples", type=int, default=1)
+    parser.add_argument('--no_padding', type=bool, default=False)
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--length", type=int, default=20)
     parser.add_argument("--temperature", type=float, default=1.0)
@@ -134,21 +137,23 @@ def run_model():
             # answer_text = ""
 
             story_text = "Once upon a time, in a barn near a farm house, there lived a little white kitten named Cotton. Cotton lived high up in a nice warm place above the barn where all of the farmer's horses slept. But Cotton wasn't alone in her little home above the barn, oh no. She shared her hay bed with her mommy and 5 other sisters."
-            question_text = "Where did Cotton live?"
+            question_text = "Was cotton alone in the house?"
+            # question_text = "How many sisters does cotton have?"
             answer_text = ""
 
             # story_text = "Adrian has five cats, where two are white and three and black."
             # question_text = "How many white cats does Adrian have?"
 
-            # story_text = "Patrick works as a teacher at the university of Kent."
-            # question_text = "Where does Patrick work?"
+            story_text = "Staten Island is one of the five boroughs of New York City in the U.S. state of New York. In the southwest of the city, Staten Island is the southernmost part of both the city and state of New York, with Conference House Park at the southern tip of the island and the state. The borough is separated from New Jersey by the Arthur Kill and the Kill Van Kull, and from the rest of New York by New York Bay. With a 2016 Census-estimated population of 476,015, Staten Island is the least populated of the boroughs but is the third-largest in area at . Staten Island is the only borough of New York with a non-Hispanic White majority. The borough is coextensive with Richmond County, and until 1975 was the Borough of Richmond. Its flag was later changed to reflect this. Staten Island has been sometimes called \"the forgotten borough\" by inhabitants who feel neglected by the city government. \n\nThe North Shore\u2014especially the neighborhoods of St. George, Tompkinsville, Clifton, and Stapleton\u2014is the most urban part of the island; it contains the designated St. George Historic District and the St. Paul's Avenue-Stapleton Heights Historic District, which feature large Victorian houses. The East Shore is home to the F.D.R. Boardwalk, the fourth-longest in the world. The South Shore, site of the 17th-century Dutch and French Huguenot settlement, developed rapidly beginning in the 1960s and 1970s and is now mostly suburban in character. The West Shore is the least populated and most industrial part of the island."
+            question_text = "Where do Quinton and Kendra travel to and from every day?"
+            question_text = "What does Kendra not want to miss?"
+            question_text = "How many burroughs are there in New York City?"
 
             special_token_ids = enc.convert_tokens_to_ids(special_tokens)
 
             story_ids = enc.convert_tokens_to_ids(enc.tokenize(story_text))
             question_ids = enc.convert_tokens_to_ids(enc.tokenize(question_text))
             answer_ids = enc.convert_tokens_to_ids(enc.tokenize(answer_text))
-
             if args.model == "gpt2-medium":
                 full_input, full_pos, full_tok = u.prep_pad(48, 200, 770, story_ids, question_ids, answer_ids, special_token_ids, 0)
             elif args.model == "gpt2":
@@ -159,17 +164,28 @@ def run_model():
             full_pos = full_pos[0:flag+1]
             full_tok = full_tok[0:flag+1]
 
+            if args.no_padding:
+                full_tok = np.zeros(len(full_tok)).tolist()
+                full_pos = np.zeros(len(full_pos)).tolist()
+
             for word_idx in trange(args.length):
+                # in_tuple = (full_input, None, None)
                 new_word_id = sample_word(
                     model=pretrained_model,
+                    # context=torch.tensor(full_input, dtype=torch.int64),
                     context=torch.tensor((full_input, full_pos, full_tok), dtype=torch.int64),
+                    # new_word_index=flag+word_idx,
                     new_word_index=flag+word_idx,
                     temperature=args.temperature,
                 )
 
                 full_input.append(new_word_id)
-                full_pos.append(word_idx)
-                full_tok.append(7)
+                if args.no_padding:
+                    full_pos.append(0)
+                    full_tok.append(0)
+                else:
+                    full_pos.append(word_idx+2)
+                    full_tok.append(7)
 
                 if new_word_id == special_token_ids[5]:
                     KEEP_GENERATING = False

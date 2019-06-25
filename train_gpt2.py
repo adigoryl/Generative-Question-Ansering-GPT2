@@ -3,7 +3,9 @@ import datetime
 import shutil
 
 import torch
+from torch import nn
 import argparse
+import torch.nn.functional as F
 
 from pytorch_pretrained_bert import GPT2Tokenizer, GPT2Model, GPT2LMHeadModel, GPT2DoubleHeadsModel, OpenAIAdam
 from torch.utils.data import (DataLoader, RandomSampler, TensorDataset)
@@ -108,6 +110,21 @@ def format_data(dataset, special_tokens, device, multi_class_len, max_a, max_q, 
     tensor_dataset.append(tuple(torch.tensor(t, dtype=torch.int64, device=device) for t in input_tuple))
 
     return tensor_dataset[0]
+
+
+class discriminator(nn.Module):
+    def __init__(self, in_features, out_features):
+        super(discriminator, self).__init__()
+        # Bias by default = True
+        self.fwd = nn.Linear(in_features, out_features)
+
+    def forward(self, x, args):
+        if args.classifier_mean:
+            x = torch.mean(x, 1).squeeze()
+        else:
+            x = x[0, -1, :]
+        x = self.fwd(x)
+        return F.softmax(x, dim=0)
 
 
 def main():
